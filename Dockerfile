@@ -12,7 +12,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY search_api.py .
-COPY link_verify.py .
 
 # Expose port (Cloud Run requires this)
 EXPOSE 8080
