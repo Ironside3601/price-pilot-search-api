@@ -76,7 +76,7 @@ jobs:
           gcloud run deploy ${{ env.SERVICE_NAME }} \
             --image gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }} \
             --region ${{ env.REGION }} \
-            --service-account search-api-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
+            --service-account zinoatest1@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
             --allow-unauthenticated \
             --port 8080 \
             --memory 512Mi \
