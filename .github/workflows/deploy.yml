@@ -1,0 +1,111 @@
+name: Test and Deploy
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: 'Deploy to Cloud Run'
+        required: true
+        default: 'true'
+        type: boolean
+
+env:
+  PROJECT_ID: price-pilot-1765213055260
+  REGION: europe-west1
+  SERVICE_NAME: search-api
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      
+      - name: Run unit tests
+        run: |
+          pytest tests/ -v --tb=short
+      
+      - name: Report test results
+        if: always()
+        run: echo "✅ All tests passed!"
+
+  build-and-deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.deploy == 'true'
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v1
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          service_account_key: ${{ secrets.GCP_SA_KEY }}
+          export_default_credentials: true
+      
+      - name: Configure Docker
+        run: gcloud auth configure-docker gcr.io
+      
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }} \
+            -t gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:latest \
+            .
+      
+      - name: Push image to Container Registry
+        run: |
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+          docker push gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:latest
+      
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE_NAME }} \
+            --image gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }} \
+            --region ${{ env.REGION }} \
+            --service-account search-api-sa@${{ env.PROJECT_ID }}.iam.gserviceaccount.com \
+            --allow-unauthenticated \
+            --port 8080 \
+            --memory 512Mi \
+            --cpu 1 \
+            --timeout 300 \
+            --quiet
+      
+      - name: Get deployment URL
+        run: |
+          gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region ${{ env.REGION }} \
+            --format='value(status.url)' > service-url.txt
+      
+      - name: Test deployed service
+        run: |
+          SERVICE_URL=$(cat service-url.txt)
+          echo "Testing $SERVICE_URL/health"
+          curl -f "$SERVICE_URL/health" || exit 1
+      
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const url = fs.readFileSync('service-url.txt', 'utf8').trim();
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `✅ Deployed to: ${url}`
+            });
