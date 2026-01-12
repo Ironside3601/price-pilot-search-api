@@ -92,7 +92,8 @@ except Exception as e:
     raise SystemExit(1)
 
 # Concurrency limit for parallel searches
-MAX_CONCURRENT_SEARCHES = 5
+# Increased to 10 for faster retailer search processing
+MAX_CONCURRENT_SEARCHES = 10
 
 # Request timeout in seconds
 REQUEST_TIMEOUT = 10
