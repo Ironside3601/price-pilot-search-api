@@ -42,10 +42,10 @@ git push origin feature/your-changes
 ```
 
 When you merge to `main`, GitHub Actions will:
-1. ✅ Run unit tests
-2. ✅ Build Docker image
-3. ✅ Push to Container Registry
-4. ✅ Deploy to Cloud Run
+1. Run unit tests
+2. Build Docker image
+3. Push to Container Registry
+4. Deploy to Cloud Run
 
 ## How It Works
 
