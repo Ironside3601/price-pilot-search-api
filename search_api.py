@@ -7,13 +7,17 @@ It returns found links which can then be verified by the Link Verification API.
 Port: 5001
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ValidationError
 import aiohttp
 import asyncio
 from typing import List, Dict, Any, Optional
 import urllib.parse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 # =============================================================================
 # FASTAPI APP SETUP
@@ -25,14 +29,32 @@ app = FastAPI(
     version="1.0.0"
 )
 
-# Enable CORS for Chrome extension requests
+# Enable CORS for Chrome extension requests only
+# This allows ANY Chrome extension during development,
+# later in production we will use a specific extension ID to prevent abuse.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origin_regex=r"^chrome-extension://[a-z]{32}$",
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["POST", "GET", "OPTIONS"],
+    allow_headers=["Content-Type", "Accept"],
 )
+
+# =============================================================================
+# RATE LIMITING
+# =============================================================================
+
+# Initialize rate limiter with IP-based limiting
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+
+# Custom exception handler for rate limit exceeded
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"error": "Rate limit exceeded. Please try again later.", "detail": str(exc.detail)}
+    )
 
 # =============================================================================
 # CONFIGURATION & SECRETS
@@ -323,7 +345,8 @@ async def perform_multi_retailer_search(search_query: str, product_title: str) -
 # =============================================================================
 
 @app.get("/health", response_model=HealthResponse)
-async def health_check():
+@limiter.limit("100/minute")
+async def health_check(request: Request):
     """Health check endpoint."""
     return {
         'status': 'ok',
@@ -335,15 +358,28 @@ async def health_check():
 
 
 @app.post("/search", response_model=SearchResponse)
-async def search(request: SearchRequest):
+@limiter.limit("20/minute")
+async def search(request: Request):
     """
     Perform multi-retailer search for a product.
     
     - **searchQuery**: The product search query
     - **productTitle**: Optional product title for logging (defaults to searchQuery)
+    
+    Rate limited to 20 requests per minute per IP address.
     """
-    search_query = request.searchQuery
-    product_title = request.productTitle or search_query
+    # Parse the JSON body manually since slowapi requires 'request' as the first parameter
+    try:
+        body = await request.json()
+        search_request = SearchRequest(**body)
+    except ValidationError as e:
+        # Return 422 for Pydantic validation errors
+        raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Invalid request body: {str(e)}")
+    
+    search_query = search_request.searchQuery
+    product_title = search_request.productTitle or search_query
     
     if not search_query:
         raise HTTPException(status_code=400, detail="Missing required field: searchQuery")
@@ -367,7 +403,8 @@ async def search(request: SearchRequest):
 
 
 @app.get("/retailers", response_model=RetailersResponse)
-async def get_retailers():
+@limiter.limit("100/minute")
+async def get_retailers(request: Request):
     """Get list of supported UK retailers."""
     return {
         'retailers': UK_RETAILERS,
@@ -385,9 +422,5 @@ if __name__ == '__main__':
     
     # Get port from environment variable or default to 8080 (required for Cloud Run)
     port = int(os.environ.get('PORT', 8080))
-    host = '0.0.0.0'  # Listen on all interfaces for Cloud Run
-    
-    print(f"Search API starting on {host}:{port} ({len(UK_RETAILERS)} retailers)")
-    print("Endpoints: POST /search, GET /health, GET /retailers, GET /docs")
-    
+    host = '0.0.0.0' 
     uvicorn.run(app, host=host, port=port)
